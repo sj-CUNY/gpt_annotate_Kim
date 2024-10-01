@@ -29,6 +29,7 @@ Our code aims to streamline automated text annotation for different datasets and
 
 """
 
+from io import StringIO
 import subprocess
 import sys
 
@@ -52,7 +53,7 @@ import os
 
 def prepare_data(text_to_annotate, codebook, key,
                  prep_codebook = False, human_labels = True, no_print_preview = False):
-
+  print("WELCOME TO PREPARE DATA")
   """
   This function ensures that the data is in the correct format for LLM annotation. 
   If the data fails any of the requirements, returns the original input dataframe.
@@ -81,7 +82,7 @@ def prepare_data(text_to_annotate, codebook, key,
 
   # Make copy of input data
   original_df = text_to_annotate.copy()
-
+  print(original_df.columns)
   # set OpenAI key
   openai.api_key = key
 
@@ -93,7 +94,8 @@ def prepare_data(text_to_annotate, codebook, key,
   text_to_annotate = text_to_annotate \
                     .reset_index() \
                     .rename(columns={'index':'unique_id'})
-
+  print(text_to_annotate.columns[0])
+  print(text_to_annotate.columns[1])
   ##### Minor Cleaning
   # Drop any Unnamed columns
   if any('Unnamed' in col for col in text_to_annotate.columns):
@@ -115,7 +117,9 @@ def prepare_data(text_to_annotate, codebook, key,
     print("Sample data format:")
     error_message(human_labels)
     return original_df
-  
+  else:
+    print("second column is text")
+
   ##### 2) If human_labels == False, there should only be 2 columns
   if human_labels == False and len(text_to_annotate.columns) != 2:
     print("ERROR: You have set human_labels = False, which means you should only have two columns in your data.")
@@ -126,6 +130,8 @@ def prepare_data(text_to_annotate, codebook, key,
     print("Sample data format:")
     error_message(human_labels)
     return original_df
+  else:
+    print("Good you have 2columns")
 
   ##### 3) If human_labels == True, there should be more than 2 columns
   if human_labels == True and len(text_to_annotate.columns) < 3:
@@ -209,7 +215,7 @@ def prepare_data(text_to_annotate, codebook, key,
 
 
 def gpt_annotate(text_to_annotate, codebook, key, 
-                 num_iterations = 3, model = "gpt-4", temperature = 0.6, batch_size = 10,
+                 num_iterations = 1, model = "gpt-3.5-turbo", temperature = 0.6, batch_size = 1,
                  human_labels = True,  data_prep_warning = True, 
                  time_cost_warning = True):
   """
@@ -357,7 +363,8 @@ def gpt_annotate(text_to_annotate, codebook, key,
             # annotate the data by prompting GPT
             response = get_response(codebook, llm_query, model, temperature, key)
             # parse GPT's response into a clean dataframe
-            text_df_out = parse_text(response, col_names)
+            #text_df_out = parse_text(response, col_names)
+            #print(text_df_out)
             break
           except:
             fails += 1
@@ -366,30 +373,31 @@ def gpt_annotate(text_to_annotate, codebook, key,
           need_response = False 
 
       # update iteration
-      text_df_out['iteration'] = j+1
+      #text_df_out['iteration'] = j+1
 
       # add iteration annotation results to output df
-      out = pd.concat([out, text_df_out])
+      llm_response = StringIO(response.choices[0].message.content)
+      out = pd.concat([out, pd.read_csv(llm_response, sep='\n\n', engine='python')])
       time.sleep(.5)
     # print status report  
     print("iteration: ", j+1, "completed")
 
   # Convert unique_id col to numeric
-  out['unique_id'] = pd.to_numeric(out['unique_id'])
+  #out['unique_id'] = pd.to_numeric(out['unique_id'])
 
   # Combine input df (i.e., df with text column and true category labels)
-  out_all = pd.merge(text_to_annotate, out, how="inner", on="unique_id")
+  #out_all = pd.merge(text_to_annotate, out, how="inner", on="unique_id")
 
   # replace any NA values with 0's
-  out_all.replace('', np.nan, inplace=True)
-  out_all.replace('-', np.nan, inplace=True)
-  out_all.fillna(0, inplace=True)
+  #out_all.replace('', np.nan, inplace=True)
+  #out_all.replace('-', np.nan, inplace=True)
+  #out_all.fillna(0, inplace=True)
 
   ##### output 1: full annotation results
-  out_all.to_csv('gpt_out_all_iterations.csv',index=False)
+  #out_all.to_csv('gpt_out_all_iterations.csv',index=False)
 
   # calculate modal label and consistency score
-  out_mode = get_mode_and_consistency(out_all, col_names,num_iterations,human_labels)
+  #out_mode = get_mode_and_consistency(out_all, col_names,num_iterations,human_labels)
 
   if human_labels == True:
     # evaluate classification per category
@@ -415,9 +423,11 @@ def gpt_annotate(text_to_annotate, codebook, key,
 
   else:
     # if not assessing performance against human annotators, then only save out_mode
-    out_final = out_mode.copy()
-    out_final.to_csv('gpt_out_final.csv',index=False)
-    return out_all, out_final
+  #  out_final = out_mode.copy()
+    out.to_csv('gpt_out_final.csv',index=False)
+    out_all = out
+    out_final = out
+  return out_all, out_final
 
 ########### Helper Functions
 
@@ -431,7 +441,7 @@ def prepare_codebook(codebook):
   Returns:
     Updated codebook ready for annotation.
   """
-  beginning = "Use this codebook for text classification. Return your classifications in a table with one column for text number (the number preceding each text sample) and a column for each label. Use a csv format. "
+  beginning = "Use this codebook for text classification. Return your classifications in lists where each list begins with the classification label of the set of words, phrases or sentences from the text. Separate the lists by semi-colon. "
   end = " Classify the following text samples:"
   return beginning + codebook + end
 
@@ -518,7 +528,7 @@ def get_classification_categories(codebook, key):
 
   # llm_query to ask GPT for categories from codebook
   instructions = "Below I am going to provide you with two sets of instructions (Part 1 and Part 2). The first part will contain detailed instructions for a text classification project. The second part will ask you to identify information about part 1. Prioritize the instructions from Part 2. Part 1:"
-  llm_query = "Part 2: I've provided a codebook in the previous sentences. Please print the categories in the order you will classify them. Ignore every other task that I described in the codebook.   I only want to know the categories. Do not include any text numbers or any annotations in your response. Do not include any language like 'The categories to be identified are:'. Only include the names of the categories you are identifying. : "
+  llm_query = "Part 2: I've provided a codebook in the previous sentences. Please print the categories in the order you will classify them.    I only want to know the categories.  Do not include any language like 'The categories to be identified are:'. Only include the names of the categories you are identifying and the list of text matching reach categories. : "
 
   # Set temperature to 0 to make model deterministic
   temperature = 0
@@ -539,10 +549,12 @@ def get_classification_categories(codebook, key):
   text = response.choices[0].message.content
   text_split = text.split('\n')
   text_out = text_split[0]
+  print(text)
   # text_out_list is final output of categories as a list
-  codebook_columns = text_out.split(', ')
+  #codebook_columns = text_out.split(', ')
 
-  return codebook_columns
+#  return codebook_columns
+  return text_split
 
 def parse_text(response, headers):
   """
